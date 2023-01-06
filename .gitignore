@@ -1,0 +1,6 @@
+.*
+!.git*
+!.clang-format
+
+build/
+samefunc
