@@ -177,7 +177,7 @@ void GetFunctionsFromElf(vec<Func> & out, std::string_view elf_name, vec<u8> con
 
                 if (!is_relocatable_elf)
                 {
-                    value = value - sec_vaddr[sym->st_shndx];
+                    value = value - sec_vaddr[leswap(sym->st_shndx)];
                 }
 
                 auto point_offset = data_offset + (value & ~1);
@@ -228,6 +228,14 @@ void GetFunctionsFromElf(vec<Func> & out, std::string_view elf_name, vec<u8> con
                 auto rel = reinterpret_cast<Elf32_Rel const *>(rel_data + entsize * j);
 
                 auto offset = leswap(rel->r_offset);
+
+                /* non-relocatable elves with relocations can exist and are useful for this kind of things */
+                if (!is_relocatable_elf)
+                {
+                    offset = offset - sec_vaddr[applies_to];
+                }
+
+                assert(sec_mask_off[applies_to] + offset < sec_mask.size());
 
                 switch (ELF32_R_TYPE(leswap(rel->r_info)))
                 {
@@ -314,7 +322,7 @@ void GetFunctionsFromElf(vec<Func> & out, std::string_view elf_name, vec<u8> con
 
                 if (!is_relocatable_elf)
                 {
-                    value = value - sec_vaddr[sym->st_shndx];
+                    value = value - sec_vaddr[leswap(sym->st_shndx)];
                 }
 
                 auto is_thumb = (value & 1) != 0;

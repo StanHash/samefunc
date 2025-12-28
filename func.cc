@@ -10,8 +10,9 @@ bool Func::Matches(bool is_thumb, u8 const * data, u8 const * mask, usize len) c
 
     for (usize i = 0u; i < len; i++)
     {
-        auto lb = this->data[i] & this->mask[i];
-        auto rb = data[i] & mask[i];
+        u8 mb = mask[i] & this->mask[i];
+        u8 lb = this->data[i] & mb;
+        u8 rb = data[i] & mb;
 
         if (lb != rb)
             return false;
