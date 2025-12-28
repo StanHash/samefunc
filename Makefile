@@ -5,7 +5,7 @@ SOURCES := main.cc elf32.cc func.cc
 BUILDDIR := build
 
 CXX ?= g++
-CXXFLAGS := -Wall -Wextra -std=c++17 -g -Og
+CXXFLAGS := -Wall -Wextra -std=c++20 -g -Og
 
 # work
 

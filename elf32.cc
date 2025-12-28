@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <format>
 
 #include <elf.h>
 
@@ -78,7 +79,7 @@ void MaskMem(MemPt::Kind kind, u8 const * data, u8 * mask, usize len)
     }
 }
 
-void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
+void GetFunctionsFromElf(vec<Func> & out, std::string_view elf_name, vec<u8> const & elf_data, bool lax)
 {
     auto head = reinterpret_cast<Elf32_Ehdr const *>(elf_data.data());
 
@@ -90,8 +91,9 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
     assert(head->e_ident[EI_MAG3] == ELFMAG3);
     assert(head->e_ident[EI_CLASS] == ELFCLASS32);
     assert(head->e_ident[EI_DATA] == ELFDATA2LSB);
-    assert(leswap(head->e_type) == ET_REL);
     assert(leswap(head->e_machine) == EM_ARM);
+
+    bool is_relocatable_elf = leswap(head->e_type) == ET_REL;
 
     auto shnum = leswap(head->e_shnum);
     auto shoff = leswap(head->e_shoff);
@@ -99,13 +101,12 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
     // helper lambda
     auto sec = [shnum, shoff, shent, &elf_data](usize idx)
-    {
-        return reinterpret_cast<Elf32_Shdr const *>(
-            elf_data.data() + shoff + shent * idx);
-    };
+    { return reinterpret_cast<Elf32_Shdr const *>(elf_data.data() + shoff + shent * idx); };
 
     vec<u8> sec_data;
     vec<usize> sec_mask_off(shnum, SIZE_MAX);
+
+    vec<u32> sec_vaddr(shnum, UINT32_MAX);
 
     vec<MemPt> mem_points;
 
@@ -114,6 +115,8 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
     for (usize i = 0; i < shnum; i++)
     {
         auto shdr = sec(i);
+
+        sec_vaddr[i] = shdr->sh_addr;
 
         if (leswap(shdr->sh_type) == SHT_PROGBITS)
         {
@@ -137,8 +140,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
         if (leswap(shdr->sh_type) == SHT_SYMTAB)
         {
-            auto name_data =
-                elf_data.data() + leswap(sec(leswap(shdr->sh_link))->sh_offset);
+            auto name_data = elf_data.data() + leswap(sec(leswap(shdr->sh_link))->sh_offset);
 
             auto entsize = leswap(shdr->sh_entsize);
             auto entcount = leswap(shdr->sh_info); // local sym end
@@ -146,8 +148,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
             for (usize j = 0; j < entcount; j++)
             {
-                auto sym =
-                    reinterpret_cast<Elf32_Sym const *>(sym_data + entsize * j);
+                auto sym = reinterpret_cast<Elf32_Sym const *>(sym_data + entsize * j);
 
                 if (ELF32_ST_BIND(leswap(sym->st_info)) != STB_LOCAL)
                     continue;
@@ -162,8 +163,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
                     // not in a section with data
                     continue;
 
-                auto name = reinterpret_cast<char const *>(
-                    name_data + leswap(sym->st_name));
+                auto name = reinterpret_cast<char const *>(name_data + leswap(sym->st_name));
 
                 if (std::strlen(name) != 2 || name[0] != '$')
                     continue;
@@ -174,7 +174,15 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
                                              : MemPt::Unknown;
 
                 auto value = leswap(sym->st_value);
+
+                if (!is_relocatable_elf)
+                {
+                    value = value - sec_vaddr[sym->st_shndx];
+                }
+
                 auto point_offset = data_offset + (value & ~1);
+
+                assert(point_offset < sec_data.size());
 
                 mem_points.push_back({ point_offset, kind });
             }
@@ -183,12 +191,8 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
     // sort memory points (allows binary search later)
     std::sort(
-        mem_points.begin(), mem_points.end(),
-        [](auto const & left, auto const & right)
-        {
-            return left.offset * 4 + (int)left.kind <
-                   right.offset * 4 + (int)right.kind;
-        });
+        mem_points.begin(), mem_points.end(), [](auto const & left, auto const & right)
+        { return left.offset * 4 + (int)left.kind < right.offset * 4 + (int)right.kind; });
 
     // make section masks
 
@@ -201,10 +205,8 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
         auto shdr = sec(i);
 
         // making sure we can use the same code for both rel and rela
-        static_assert(
-            offsetof(Elf32_Rel, r_offset) == offsetof(Elf32_Rela, r_offset));
-        static_assert(
-            offsetof(Elf32_Rel, r_info) == offsetof(Elf32_Rela, r_info));
+        static_assert(offsetof(Elf32_Rel, r_offset) == offsetof(Elf32_Rela, r_offset));
+        static_assert(offsetof(Elf32_Rel, r_info) == offsetof(Elf32_Rela, r_info));
 
         auto sh_type = leswap(shdr->sh_type);
 
@@ -223,8 +225,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
             for (usize j = 0; j < entcount; j++)
             {
-                auto rel =
-                    reinterpret_cast<Elf32_Rel const *>(rel_data + entsize * j);
+                auto rel = reinterpret_cast<Elf32_Rel const *>(rel_data + entsize * j);
 
                 auto offset = leswap(rel->r_offset);
 
@@ -267,9 +268,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
             auto const & pt_next = mem_points[i + 1];
 
-            MaskMem(
-                pt.kind, sec_data.data() + pt.offset,
-                sec_mask.data() + pt.offset, pt_next.offset - pt.offset);
+            MaskMem(pt.kind, sec_data.data() + pt.offset, sec_mask.data() + pt.offset, pt_next.offset - pt.offset);
         }
     }
 
@@ -281,8 +280,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
         if (leswap(shdr->sh_type == SHT_SYMTAB))
         {
-            auto name_data =
-                elf_data.data() + leswap(sec(leswap(shdr->sh_link))->sh_offset);
+            auto name_data = elf_data.data() + leswap(sec(leswap(shdr->sh_link))->sh_offset);
 
             auto entsize = leswap(shdr->sh_entsize);
             auto entcount = leswap(shdr->sh_size) / entsize;
@@ -290,8 +288,7 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 
             for (usize j = 0; j < entcount; j++)
             {
-                auto sym =
-                    reinterpret_cast<Elf32_Sym const *>(sym_data + entsize * j);
+                auto sym = reinterpret_cast<Elf32_Sym const *>(sym_data + entsize * j);
 
                 if (ELF32_ST_TYPE(leswap(sym->st_info)) != STT_FUNC)
                     // not a function
@@ -314,30 +311,42 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
                     continue;
 
                 auto value = leswap(sym->st_value);
+
+                if (!is_relocatable_elf)
+                {
+                    value = value - sec_vaddr[sym->st_shndx];
+                }
+
                 auto is_thumb = (value & 1) != 0;
 
                 auto func_offset = data_offset + (value & ~1);
 
-                auto name = reinterpret_cast<char const *>(
-                    name_data + leswap(sym->st_name));
+                assert(func_offset < sec_data.size());
+
+                auto name = reinterpret_cast<char const *>(name_data + leswap(sym->st_name));
 
                 auto data = sec_data.data() + func_offset;
                 auto mask = sec_mask.data() + func_offset;
 
+                /* HACK: align size to next 4-byte boundry */
+                size = size + ((4u - size) % 4u);
+
                 bool found = false;
+
+                auto name_q = elf_name.empty() ? std::string(name) : std::format("{1}({0})", elf_name, name);
 
                 for (Func & func : out)
                 {
                     if (func.Matches(is_thumb, data, mask, size))
                     {
-                        func.AddName(name);
+                        func.AddName(std::move(name_q));
                         found = true;
                         break;
                     }
                 }
 
                 if (!found)
-                    out.emplace_back(is_thumb, name, data, mask, size);
+                    out.emplace_back(is_thumb, std::move(name_q), data, mask, size);
             }
         }
     }
@@ -346,6 +355,6 @@ void GetFunctionsFromElf(vec<Func> & out, vec<u8> const & elf_data, bool lax)
 vec<Func> GetFunctionsFromElf(vec<u8> const & elf_data, bool lax)
 {
     vec<Func> result;
-    GetFunctionsFromElf(result, elf_data, lax);
+    GetFunctionsFromElf(result, {}, elf_data, lax);
     return result;
 }

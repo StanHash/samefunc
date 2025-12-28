@@ -1,7 +1,6 @@
 #include "func.hh"
 
-bool Func::Matches(
-    bool is_thumb, u8 const * data, u8 const * mask, usize len) const
+bool Func::Matches(bool is_thumb, u8 const * data, u8 const * mask, usize len) const
 {
     if (this->is_thumb != is_thumb)
         return false;

@@ -4,12 +4,10 @@
 
 struct Func
 {
-    Func(
-        bool is_thumb, char const * name, u8 const * data, u8 const * mask,
-        usize len)
+    Func(bool is_thumb, std::string && name, u8 const * data, u8 const * mask, usize len)
         : is_thumb(is_thumb), data(data, data + len), mask(mask, mask + len)
     {
-        AddName(name);
+        AddName(std::move(name));
     }
 
     Func(Func const &) = default;
@@ -19,21 +17,16 @@ struct Func
     Func & operator=(Func &&) = default;
 
     void AddName(char const * name) { names.emplace_back(name); }
+    void AddName(std::string && name) { names.emplace_back(std::move(name)); }
 
-    bool
-    Matches(bool is_thumb, u8 const * data, u8 const * mask, usize len) const;
+    bool Matches(bool is_thumb, u8 const * data, u8 const * mask, usize len) const;
 
     bool Matches(Func const & other) const
     {
-        return Matches(
-            other.is_thumb, other.data.data(), other.mask.data(),
-            other.data.size());
+        return Matches(other.is_thumb, other.data.data(), other.mask.data(), other.data.size());
     }
 
-    static bool Matches(Func const & left, Func const & right)
-    {
-        return left.Matches(right);
-    }
+    static bool Matches(Func const & left, Func const & right) { return left.Matches(right); }
 
     bool is_thumb;
     vec<owned_str> names;

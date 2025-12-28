@@ -6,7 +6,7 @@ This is meant as a tool for aiding matching decompilation. It is useful for anal
 
 ## Build
 
-You need elf.h, make and a C++17 compiler.
+You need elf.h, (GNU) make and a C++20 compiler.
 
     make
 
